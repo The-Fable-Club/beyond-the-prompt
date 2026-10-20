@@ -1,0 +1,70 @@
+# =============================================================================
+# Cross-Platform Event Onboarding — .gitignore
+# Excludes OS metadata, logs, temporary files, downloaded installers,
+# local dependencies, and sensitive credentials/secrets.
+# =============================================================================
+
+# Operating system files
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+Thumbs.db
+Thumbs.db:encryptable
+ehthumbs.db
+ehthumbs_vista.db
+Desktop.ini
+
+# Setup logs and temporary diagnostic artifacts
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+setup-report*.txt
+setup-report*.log
+.tmp/
+tmp/
+temp/
+*.tmp
+*.temp
+*.bak
+*.swp
+*~
+
+# Downloaded installers and archives (never commit binaries)
+*.dmg
+*.pkg
+*.exe
+*.msi
+*.msix
+*.appx
+*.deb
+*.rpm
+*.AppImage
+*.tar.gz
+*.tgz
+*.zip
+
+# Node.js dependencies and local build caches
+node_modules/
+.npm/
+.eslintcache
+
+# Environment variables, credentials, and private keys
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*credentials*.json
+*secret*
+!README.md
+
+# Zepher local unsealed secrets and runtime state
+.zepher/vault/unsealed/
+.zepher/*.local.*
+.zepher/.cache/
+.zepher/logs/
