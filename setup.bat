@@ -73,6 +73,13 @@ set "NETWORK_AVAILABLE=0"
 set "HAS_WINGET=0"
 set "IS_ADMIN=0"
 set "NEW_TERMINAL_ADVISED=0"
+set "SCRIPT_DIR=%~dp0"
+
+set "BOOTSTRAP_REQUESTED=0"
+set "BOOTSTRAP_LOCAL_ZIP="
+set "BOOTSTRAP_ZIP_URL=%REPO_ZIP_URL%"
+set "BOOTSTRAP_SHA256="
+set "FORWARD_ARGS="
 
 set "STATUS_GIT=FAIL"
 set "DETAIL_GIT=Not checked"
@@ -96,16 +103,43 @@ REM Parse Command-Line Arguments
 REM ---------------------------------------------------------------------------
 :parse_args
 if "%~1"=="" goto :args_done
-if /I "%~1"=="--check-only" set "CHECK_ONLY=1" & shift & goto :parse_args
-if /I "%~1"=="--dry-run" set "CHECK_ONLY=1" & shift & goto :parse_args
-if /I "%~1"=="--no-prompt" set "NO_PROMPT=1" & shift & goto :parse_args
-if /I "%~1"=="--non-interactive" set "NO_PROMPT=1" & shift & goto :parse_args
+if /I "%~1"=="--check-only" set "CHECK_ONLY=1" & set "FORWARD_ARGS=!FORWARD_ARGS! --check-only" & shift & goto :parse_args
+if /I "%~1"=="--dry-run" set "CHECK_ONLY=1" & set "FORWARD_ARGS=!FORWARD_ARGS! --dry-run" & shift & goto :parse_args
+if /I "%~1"=="--no-prompt" set "NO_PROMPT=1" & set "FORWARD_ARGS=!FORWARD_ARGS! --no-prompt" & shift & goto :parse_args
+if /I "%~1"=="--non-interactive" set "NO_PROMPT=1" & set "FORWARD_ARGS=!FORWARD_ARGS! --non-interactive" & shift & goto :parse_args
+if /I "%~1"=="--bootstrap" set "BOOTSTRAP_REQUESTED=1" & shift & goto :parse_args
+if /I "%~1"=="--local-zip" goto :arg_local_zip
+if /I "%~1"=="--zip-url" goto :arg_zip_url
+if /I "%~1"=="--sha256" goto :arg_sha256
 if /I "%~1"=="--help" goto :show_help
 if /I "%~1"=="-h" goto :show_help
 if /I "%~1"=="/?" goto :show_help
 
 echo [ERROR] Unknown option: %~1
 goto :show_help_error
+
+:arg_local_zip
+if "%~2"=="" echo [ERROR] --local-zip requires a file path argument. & goto :show_help_error
+set "BOOTSTRAP_REQUESTED=1"
+set "BOOTSTRAP_LOCAL_ZIP=%~2"
+shift
+shift
+goto :parse_args
+
+:arg_zip_url
+if "%~2"=="" echo [ERROR] --zip-url requires a URL argument. & goto :show_help_error
+set "BOOTSTRAP_REQUESTED=1"
+set "BOOTSTRAP_ZIP_URL=%~2"
+shift
+shift
+goto :parse_args
+
+:arg_sha256
+if "%~2"=="" echo [ERROR] --sha256 requires a 64-character hex digest. & goto :show_help_error
+set "BOOTSTRAP_SHA256=%~2"
+shift
+shift
+goto :parse_args
 
 :show_help
 echo.
@@ -116,6 +150,10 @@ echo.
 echo Options:
 echo   --check-only, --dry-run        Verify installed tools without making changes
 echo   --no-prompt, --non-interactive Do not pause for interactive browser prompts
+echo   --bootstrap                    Download ^& extract full repository ZIP before running
+echo   --local-zip ^<FILE^>             Bootstrap repository from a local .zip archive
+echo   --zip-url ^<URL^>                Override repository ZIP download URL
+echo   --sha256 ^<HASH^>                Verify ZIP archive against expected SHA-256 hash
 echo   --help, -h, /?                 Show this help message and exit
 echo.
 exit /b 0
@@ -126,6 +164,18 @@ exit /b 2
 
 :args_done
 
+REM Auto-bootstrap if explicitly requested OR running standalone without repo context
+if "%BOOTSTRAP_REQUESTED%"=="1" goto :check_do_bootstrap
+if "%ONBOARD_SKIP_AUTO_BOOTSTRAP%"=="1" goto :run_main_setup
+if not exist "%SCRIPT_DIR%README.md" if not exist "%SCRIPT_DIR%setup.zsh" goto :check_do_bootstrap
+goto :run_main_setup
+
+:check_do_bootstrap
+call :run_standalone_bootstrap
+set "BOOTSTRAP_RC=%ERRORLEVEL%"
+endlocal & exit /b %BOOTSTRAP_RC%
+
+:run_main_setup
 REM ---------------------------------------------------------------------------
 REM Main Execution Flow
 REM ---------------------------------------------------------------------------
@@ -144,6 +194,149 @@ endlocal & exit /b %FINAL_EXIT_CODE%
 REM ===========================================================================
 REM Subroutines
 REM ===========================================================================
+
+:run_standalone_bootstrap
+echo.
+echo =============================================================================
+echo   AI Development Event — Windows Standalone Repository Bootstrap
+echo =============================================================================
+echo   - Bootstrapping repository files into a verified temporary workspace...
+echo -----------------------------------------------------------------------------
+
+set "BOOTSTRAP_TMP_DIR=%TEMP%\onboard-bootstrap-%RANDOM%-%RANDOM%"
+mkdir "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+if errorlevel 1 (
+    echo     [FAIL] Could not create temporary directory: %BOOTSTRAP_TMP_DIR%
+    exit /b 1
+)
+
+set "BOOTSTRAP_ZIP_FILE=%BOOTSTRAP_TMP_DIR%\repo.zip"
+set "BOOTSTRAP_EXTRACT_DIR=%BOOTSTRAP_TMP_DIR%\extracted"
+
+if defined BOOTSTRAP_LOCAL_ZIP (
+    echo     [INFO] Bootstrapping from local ZIP archive: %BOOTSTRAP_LOCAL_ZIP%
+    if not exist "%BOOTSTRAP_LOCAL_ZIP%" (
+        echo     [FAIL] Local ZIP file not found: %BOOTSTRAP_LOCAL_ZIP%
+        rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+        exit /b 1
+    )
+    copy /Y "%BOOTSTRAP_LOCAL_ZIP%" "%BOOTSTRAP_ZIP_FILE%" >nul 2>nul
+    if errorlevel 1 (
+        echo     [FAIL] Could not copy local ZIP file to temporary workspace.
+        rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+        exit /b 1
+    )
+    goto :verify_bootstrap_zip
+)
+
+if "%BOOTSTRAP_ZIP_URL%"=="" goto :bootstrap_url_missing
+if /I "%BOOTSTRAP_ZIP_URL%"=="<REPOSITORY_ZIP_URL>" goto :bootstrap_url_missing
+echo "%BOOTSTRAP_ZIP_URL%" | find "<" >nul 2>nul
+if not errorlevel 1 goto :bootstrap_url_missing
+
+if /I not "!BOOTSTRAP_ZIP_URL:~0,8!"=="https://" (
+    echo     [FAIL] Refusing insecure or non-HTTPS ZIP URL: %BOOTSTRAP_ZIP_URL%
+    rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+    exit /b 1
+)
+
+where curl >nul 2>nul
+if errorlevel 1 (
+    echo     [FAIL] 'curl.exe' was not found on PATH to download the repository archive.
+    echo     [INFO] Please download the ZIP in your browser and run:
+    echo            setup.bat --local-zip "C:\path\to\repo.zip"
+    rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+    exit /b 1
+)
+
+echo     [INFO] Downloading repository archive from: %BOOTSTRAP_ZIP_URL%
+curl -fL --retry 2 --connect-timeout 10 -o "%BOOTSTRAP_ZIP_FILE%" "%BOOTSTRAP_ZIP_URL%"
+if errorlevel 1 (
+    echo     [FAIL] Failed to download repository ZIP from %BOOTSTRAP_ZIP_URL%
+    echo     [INFO] Please download the ZIP manually in your browser and run:
+    echo            setup.bat --local-zip "%%USERPROFILE%%\Downloads\<repo>.zip"
+    rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+    exit /b 1
+)
+goto :verify_bootstrap_zip
+
+:bootstrap_url_missing
+echo     [ACTION REQUIRED] Repository ZIP URL placeholder has not been configured yet.
+echo     Please download the repository ZIP from GitHub and run:
+echo       setup.bat --local-zip "%%USERPROFILE%%\Downloads\<repo>.zip"
+rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+exit /b 1
+
+:verify_bootstrap_zip
+if not exist "%BOOTSTRAP_ZIP_FILE%" (
+    echo     [FAIL] Downloaded archive file is missing.
+    rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+    exit /b 1
+)
+
+if defined BOOTSTRAP_SHA256 (
+    set "ACTUAL_BOOT_SHA="
+    for /f "skip=1 tokens=1" %%H in ('certutil -hashfile "%BOOTSTRAP_ZIP_FILE%" SHA256 2^>nul') do (
+        if not defined ACTUAL_BOOT_SHA set "ACTUAL_BOOT_SHA=%%H"
+    )
+    if /I not "!ACTUAL_BOOT_SHA!"=="%BOOTSTRAP_SHA256%" (
+        echo     [FAIL] SHA-256 checksum mismatch for repository ZIP!
+        echo            Expected: %BOOTSTRAP_SHA256%
+        echo            Actual  : !ACTUAL_BOOT_SHA!
+        rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+        exit /b 1
+    )
+    echo     [PASS] SHA-256 checksum verified (!ACTUAL_BOOT_SHA!).
+)
+
+mkdir "%BOOTSTRAP_EXTRACT_DIR%" >nul 2>nul
+
+where tar >nul 2>nul
+if not errorlevel 1 (
+    tar -tf "%BOOTSTRAP_ZIP_FILE%" >nul 2>nul
+    if errorlevel 1 (
+        echo     [FAIL] File is not a valid ZIP archive or failed integrity check.
+        rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+        exit /b 1
+    )
+    echo     [PASS] ZIP archive integrity verified.
+    echo     [INFO] Extracting repository archive...
+    tar -xf "%BOOTSTRAP_ZIP_FILE%" -C "%BOOTSTRAP_EXTRACT_DIR%"
+    if errorlevel 1 (
+        echo     [FAIL] Failed to extract ZIP archive.
+        rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+        exit /b 1
+    )
+    goto :find_extracted_setup
+)
+
+powershell -NoProfile -Command "Expand-Archive -LiteralPath '%BOOTSTRAP_ZIP_FILE%' -DestinationPath '%BOOTSTRAP_EXTRACT_DIR%' -Force" >nul 2>nul
+if errorlevel 1 (
+    echo     [FAIL] Failed to extract ZIP archive via Expand-Archive.
+    rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+    exit /b 1
+)
+echo     [PASS] ZIP archive extracted and verified.
+
+:find_extracted_setup
+set "EXTRACTED_SETUP_BAT="
+for /f "delims=" %%F in ('dir /b /s "%BOOTSTRAP_EXTRACT_DIR%\setup.bat" 2^>nul') do (
+    if not defined EXTRACTED_SETUP_BAT set "EXTRACTED_SETUP_BAT=%%F"
+)
+
+if not defined EXTRACTED_SETUP_BAT (
+    echo     [FAIL] Could not locate 'setup.bat' inside extracted archive.
+    rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+    exit /b 1
+)
+
+echo     [PASS] Extracted and launching setup.bat...
+echo.
+set "ONBOARD_SKIP_AUTO_BOOTSTRAP=1"
+call "!EXTRACTED_SETUP_BAT!" %FORWARD_ARGS%
+set "EXTRACTED_BAT_RC=%ERRORLEVEL%"
+rmdir /s /q "%BOOTSTRAP_TMP_DIR%" >nul 2>nul
+exit /b %EXTRACTED_BAT_RC%
 
 :print_banner
 echo.

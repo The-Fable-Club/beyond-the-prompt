@@ -127,8 +127,8 @@ print_banner() {
   print ""
   print "${C_BLUE}Note on macOS Execution Permissions:${C_RESET}"
   print "  If macOS ever blocks this script from running, execute:"
-  print "    chmod +x setup.zsh bootstrap.zsh"
-  print "    xattr -d com.apple.quarantine setup.zsh bootstrap.zsh 2>/dev/null || true"
+  print "    chmod +x setup.zsh"
+  print "    xattr -d com.apple.quarantine setup.zsh 2>/dev/null || true"
   print ""
   print "${C_BLUE}Privacy & Security:${C_RESET}"
   print "  - Works even if Git and Homebrew are not pre-installed."
@@ -182,6 +182,10 @@ macOS onboarding script for the AI Development Event.
 Options:
   --check-only, --dry-run   Verify installed tools without making any system changes
   --no-prompt               Do not pause for interactive confirmation prompts
+  --bootstrap               Download & extract full repository ZIP before running
+  --local-zip <FILE>        Bootstrap repository from a local .zip archive
+  --zip-url <URL>           Override repository ZIP download URL
+  --sha256 <HASH>           Verify ZIP archive against expected SHA-256 hash
   --help, -h                Show this help message and exit
 
 If macOS blocks script execution due to permissions:
@@ -191,27 +195,194 @@ EOF
 }
 
 # -----------------------------------------------------------------------------
+# Standalone Bootstrap Routine (Runs when invoked alone or when requested)
+# -----------------------------------------------------------------------------
+run_standalone_bootstrap() {
+  local target_zip_url="$1"
+  local target_local_zip="$2"
+  local target_sha256="$3"
+  shift 3
+  local -a forward_args
+  forward_args=("$@")
+
+  print ""
+  print "${C_CYAN}=============================================================================${C_RESET}"
+  print "${C_BOLD}  AI Development Event — Standalone Repository Bootstrap${C_RESET}"
+  print "${C_CYAN}=============================================================================${C_RESET}"
+  print "  - Bootstrapping repository files into a verified temporary workspace..."
+  print "${C_CYAN}-----------------------------------------------------------------------------${C_RESET}"
+
+  local temp_dir
+  temp_dir="$(mktemp -d "${TMPDIR:-/tmp}/onboard-bootstrap.XXXXXX")"
+  local archive_file="${temp_dir}/repo.zip"
+
+  if [[ -n "$target_local_zip" ]]; then
+    print "    [INFO] Bootstrapping from local ZIP archive: ${target_local_zip}"
+    if [[ ! -f "$target_local_zip" ]]; then
+      print "    ${C_RED}[FAIL]${C_RESET} Local ZIP file not found: ${target_local_zip}" >&2
+      rm -rf "$temp_dir"
+      return 1
+    fi
+    cp "$target_local_zip" "$archive_file"
+  else
+    if [[ -z "$target_zip_url" ]] || [[ "$target_zip_url" == *"<"* ]]; then
+      print "    ${C_YELLOW}[ACTION REQUIRED]${C_RESET} Repository ZIP URL placeholder has not been configured yet."
+      print "    Please download the repository ZIP from GitHub and run:"
+      print "      ./setup.zsh --local-zip ~/Downloads/<repo>.zip"
+      rm -rf "$temp_dir"
+      return 1
+    fi
+
+    if [[ "$target_zip_url" != https://* ]]; then
+      print "    ${C_RED}[FAIL]${C_RESET} Refusing insecure or non-HTTPS ZIP URL: ${target_zip_url}" >&2
+      rm -rf "$temp_dir"
+      return 1
+    fi
+
+    if ! command -v curl >/dev/null 2>&1; then
+      print "    ${C_RED}[FAIL]${C_RESET} 'curl' is required to download the repository archive." >&2
+      rm -rf "$temp_dir"
+      return 1
+    fi
+
+    print "    [INFO] Downloading repository archive from: ${target_zip_url}"
+    if ! curl -fL --retry 2 --connect-timeout 10 -o "$archive_file" "$target_zip_url"; then
+      print "    ${C_RED}[FAIL]${C_RESET} Failed to download repository ZIP from ${target_zip_url}" >&2
+      print "    [INFO] Please download the ZIP manually in your browser and run:" >&2
+      print "           ./setup.zsh --local-zip ~/Downloads/<repo>.zip" >&2
+      rm -rf "$temp_dir"
+      return 1
+    fi
+  fi
+
+  # Verify ZIP magic bytes (PK\x03\x04)
+  local magic_hex=""
+  magic_hex="$(head -c 4 "$archive_file" 2>/dev/null | od -An -tx1 2>/dev/null | tr -d '[:space:]' || true)"
+  if [[ "$magic_hex" != "504b0304" ]]; then
+    print "    ${C_RED}[FAIL]${C_RESET} File is not a valid ZIP archive (magic header: '${magic_hex:-none}', expected '504b0304')." >&2
+    rm -rf "$temp_dir"
+    return 1
+  fi
+
+  # Optional SHA-256 check
+  if [[ -n "$target_sha256" ]]; then
+    local actual_sha256
+    actual_sha256="$(shasum -a 256 "$archive_file" 2>/dev/null | awk '{print tolower($1)}' || true)"
+    if [[ "$actual_sha256" != "${target_sha256:l}" ]]; then
+      print "    ${C_RED}[FAIL]${C_RESET} SHA-256 checksum mismatch for repository ZIP!" >&2
+      print "           Expected: ${target_sha256:l}" >&2
+      print "           Actual  : ${actual_sha256:-unknown}" >&2
+      rm -rf "$temp_dir"
+      return 1
+    fi
+    print "    ${C_GREEN}[PASS]${C_RESET} SHA-256 checksum verified (${actual_sha256})."
+  fi
+
+  if ! unzip -tq "$archive_file" >/dev/null 2>&1; then
+    print "    ${C_RED}[FAIL]${C_RESET} ZIP archive integrity check failed." >&2
+    rm -rf "$temp_dir"
+    return 1
+  fi
+  print "    ${C_GREEN}[PASS]${C_RESET} ZIP archive integrity verified."
+
+  local extract_dir="${temp_dir}/extracted"
+  mkdir -p "$extract_dir"
+  if ! unzip -q "$archive_file" -d "$extract_dir"; then
+    print "    ${C_RED}[FAIL]${C_RESET} Failed to extract ZIP archive." >&2
+    rm -rf "$temp_dir"
+    return 1
+  fi
+
+  local found_script
+  found_script="$(find "$extract_dir" -maxdepth 3 -type f -name "setup.zsh" 2>/dev/null | head -n 1 || true)"
+  if [[ -z "$found_script" ]] || [[ ! -s "$found_script" ]]; then
+    print "    ${C_RED}[FAIL]${C_RESET} Could not locate 'setup.zsh' inside extracted archive." >&2
+    rm -rf "$temp_dir"
+    return 1
+  fi
+
+  chmod +x "$found_script" 2>/dev/null || true
+  print "    ${C_GREEN}[PASS]${C_RESET} Extracted and launching setup.zsh..."
+  print ""
+
+  ONBOARD_SKIP_AUTO_BOOTSTRAP=1 /bin/zsh "$found_script" "${forward_args[@]}"
+  local child_rc=$?
+  rm -rf "$temp_dir"
+  return $child_rc
+}
+
+# -----------------------------------------------------------------------------
 # Parse Command-Line Arguments
 # -----------------------------------------------------------------------------
-for arg in "$@"; do
-  case "$arg" in
+BOOTSTRAP_REQUESTED=0
+BOOTSTRAP_LOCAL_ZIP=""
+BOOTSTRAP_ZIP_URL="$REPO_ZIP_URL"
+BOOTSTRAP_SHA256=""
+typeset -a FORWARD_ARGS
+FORWARD_ARGS=()
+
+while (( $# > 0 )); do
+  case "$1" in
     --check-only|--dry-run)
       CHECK_ONLY=1
+      FORWARD_ARGS+=("$1")
+      shift
       ;;
     --no-prompt|--non-interactive)
       NO_PROMPT=1
+      FORWARD_ARGS+=("$1")
+      shift
+      ;;
+    --bootstrap)
+      BOOTSTRAP_REQUESTED=1
+      shift
+      ;;
+    --local-zip)
+      if (( $# < 2 )); then
+        print "${C_RED}[ERROR] --local-zip requires a file path argument.${C_RESET}" >&2
+        exit 2
+      fi
+      BOOTSTRAP_REQUESTED=1
+      BOOTSTRAP_LOCAL_ZIP="$2"
+      shift 2
+      ;;
+    --zip-url)
+      if (( $# < 2 )); then
+        print "${C_RED}[ERROR] --zip-url requires a URL argument.${C_RESET}" >&2
+        exit 2
+      fi
+      BOOTSTRAP_REQUESTED=1
+      BOOTSTRAP_ZIP_URL="$2"
+      shift 2
+      ;;
+    --sha256)
+      if (( $# < 2 )); then
+        print "${C_RED}[ERROR] --sha256 requires a 64-character hex digest.${C_RESET}" >&2
+        exit 2
+      fi
+      BOOTSTRAP_SHA256="$2"
+      shift 2
       ;;
     --help|-h)
       show_help
       exit 0
       ;;
     *)
-      print "${C_RED}Unknown option: ${arg}${C_RESET}"
+      print "${C_RED}Unknown option: $1${C_RESET}"
       show_help
       exit 2
       ;;
   esac
 done
+
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+
+# Auto-bootstrap if explicitly requested OR running standalone without repo context
+if [[ "$BOOTSTRAP_REQUESTED" == "1" ]] || \
+   { [[ ! -f "${SCRIPT_DIR}/README.md" ]] && [[ ! -f "${SCRIPT_DIR}/setup.bat" ]] && [[ "${ONBOARD_SKIP_AUTO_BOOTSTRAP:-0}" != "1" ]]; }; then
+  run_standalone_bootstrap "$BOOTSTRAP_ZIP_URL" "$BOOTSTRAP_LOCAL_ZIP" "$BOOTSTRAP_SHA256" "${FORWARD_ARGS[@]}"
+  exit $?
+fi
 
 # -----------------------------------------------------------------------------
 # Refresh Session PATH (In-Memory Only — Does Not Modify Shell Startup Files)

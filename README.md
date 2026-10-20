@@ -6,10 +6,10 @@ Welcome! This repository prepares your laptop for our hands-on AI development ev
 
 ## Supported Operating Systems
 
-| Operating System | Supported Architectures | Setup Script | First-Run Bootstrap Launcher | Terminal to Use |
-| :--- | :--- | :--- | :--- | :--- |
-| **macOS** (macOS 13 Ventura or newer recommended) | Apple Silicon (`arm64`) & Intel (`x86_64`) | `setup.zsh` | `bootstrap.zsh` | **Terminal** (Zsh) |
-| **Windows** (Windows 10 / Windows 11) | 64-bit (`x64` / `ARM64`) | `setup.bat` | `bootstrap.bat` | **Command Prompt** (`cmd.exe`) |
+| Operating System | Supported Architectures | Single Entry-Point Script | Terminal to Use |
+| :--- | :--- | :--- | :--- |
+| **macOS** (macOS 13 Ventura or newer recommended) | Apple Silicon (`arm64`) & Intel (`x86_64`) | `setup.zsh` | **Terminal** (Zsh) |
+| **Windows** (Windows 10 / Windows 11) | 64-bit (`x64` / `ARM64`) | `setup.bat` | **Command Prompt** (`cmd.exe`) |
 
 ---
 
@@ -21,7 +21,7 @@ Welcome! This repository prepares your laptop for our hands-on AI development ev
 | **Clone URL** | `https://github.com/The-Fable-Club/beyond-the-prompt.git` |
 | **Direct ZIP Archive Download** | [https://github.com/The-Fable-Club/beyond-the-prompt/archive/refs/heads/main.zip](https://github.com/The-Fable-Club/beyond-the-prompt/archive/refs/heads/main.zip) |
 
-*(If you ever fork or mirror this repository under a different organization, you can update `REPO_WEB_URL` and `DEFAULT_REPO_ZIP_URL` at the top of [`bootstrap.zsh`](file:///Users/rpshakkthi/documents/rakshith/beyond-the-prompt/bootstrap.zsh), [`bootstrap.bat`](file:///Users/rpshakkthi/documents/rakshith/beyond-the-prompt/bootstrap.bat), [`setup.zsh`](file:///Users/rpshakkthi/documents/rakshith/beyond-the-prompt/setup.zsh), and [`setup.bat`](file:///Users/rpshakkthi/documents/rakshith/beyond-the-prompt/setup.bat).)*
+*(If you ever fork or mirror this repository under a different organization, you can update `REPO_WEB_URL` and `REPO_ZIP_URL` at the top of [`setup.zsh`](file:///Users/rpshakkthi/documents/rakshith/beyond-the-prompt/setup.zsh) and [`setup.bat`](file:///Users/rpshakkthi/documents/rakshith/beyond-the-prompt/setup.bat).)*
 
 ---
 
@@ -52,55 +52,41 @@ Each component is detected independently:
 
 ## Quick Start Instructions
 
-Choose **Option A** or **Option B** if you **do not** have Git installed yet, or **Option C** if you already have Git installed.
+Participants only need to run **one script** for their operating system (`setup.zsh` on macOS or `setup.bat` on Windows).
 
-### Option A: No Git Installed — GitHub Browser ZIP Download (Recommended for Beginners)
-
-1. Open the event repository page in your web browser: [https://github.com/The-Fable-Club/beyond-the-prompt](https://github.com/The-Fable-Club/beyond-the-prompt)
-   *(Or download the ZIP directly from [https://github.com/The-Fable-Club/beyond-the-prompt/archive/refs/heads/main.zip](https://github.com/The-Fable-Club/beyond-the-prompt/archive/refs/heads/main.zip))*
-2. Click the green **Code** button and select **Download ZIP**.
-3. **Extract the downloaded `.zip` file**:
-   - **On macOS**: Open your **Downloads** folder in Finder and **double-click** the `.zip` file to extract the folder. Open **Terminal**, type `cd ` (with a space), drag the extracted folder into the Terminal window, and press **Return**.
-   - **On Windows**: Open your **Downloads** folder in File Explorer, **right-click** the `.zip` file, click **Extract All...**, and click **Extract**. Open **Command Prompt** (`cmd.exe`) and `cd` into the extracted folder:
-     ```bat
-     cd "%USERPROFILE%\Downloads\beyond-the-prompt-main"
-     ```
-4. **Run the setup script for your operating system** (see Step 2A or Step 2B below).
-
----
-
-### Option B: No Git Installed — First-Run Bootstrap Launcher (`bootstrap.zsh` / `bootstrap.bat`)
-
-If you only downloaded `bootstrap.zsh` (macOS) or `bootstrap.bat` (Windows)—or downloaded the `.zip` archive without extracting it—the bootstrap launcher will download/verify the repository ZIP archive (checking the ZIP magic header, archive structure, and optional SHA-256 hash), extract it to a temporary folder, and launch the setup script automatically:
-
-**macOS (Terminal / Zsh):**
-```zsh
-chmod +x bootstrap.zsh
-./bootstrap.zsh
-```
-*(Or using a browser-downloaded `.zip` file without extracting manually:)*
-```zsh
-chmod +x bootstrap.zsh
-./bootstrap.zsh --local-zip ~/Downloads/beyond-the-prompt-main.zip
-```
-
-**Windows (Command Prompt / `cmd.exe`):**
-```bat
-bootstrap.bat
-```
-*(Or using a browser-downloaded `.zip` file without extracting manually:)*
-```bat
-bootstrap.bat --local-zip "%USERPROFILE%\Downloads\beyond-the-prompt-main.zip"
-```
-
----
-
-### Option C: Git Already Installed — Clone the Repository
+### Option A: Clone with Git (If Git is Already Installed)
 
 ```bash
 git clone https://github.com/The-Fable-Club/beyond-the-prompt.git
 cd beyond-the-prompt
 ```
+
+Then run the script for your operating system:
+- **macOS**: `chmod +x setup.zsh && ./setup.zsh`
+- **Windows**: `setup.bat`
+
+---
+
+### Option B: Download ZIP (If Git is Not Installed)
+
+1. Open [https://github.com/The-Fable-Club/beyond-the-prompt](https://github.com/The-Fable-Club/beyond-the-prompt) in your browser.
+2. Click **Code → Download ZIP** (or direct download: [main.zip](https://github.com/The-Fable-Club/beyond-the-prompt/archive/refs/heads/main.zip)).
+3. **Extract the ZIP file**:
+   - **macOS**: Double-click the `.zip` file in Finder, open Terminal, and `cd` into the extracted folder.
+   - **Windows**: Right-click the `.zip` file in File Explorer, click **Extract All...**, and `cd` into the folder in Command Prompt.
+4. Run:
+   - **macOS**: `chmod +x setup.zsh && ./setup.zsh`
+   - **Windows**: `setup.bat`
+
+---
+
+### Option C: Single-File Standalone Execution (Automatic Bootstrap)
+
+If you downloaded only `setup.zsh` (macOS) or `setup.bat` (Windows) by itself outside the repository:
+- Running `./setup.zsh` or `setup.bat` will automatically detect standalone mode, download and verify the repository ZIP into a temporary workspace, and launch the full setup!
+- You can also pass a downloaded ZIP file directly:
+  - **macOS**: `./setup.zsh --local-zip ~/Downloads/beyond-the-prompt-main.zip`
+  - **Windows**: `setup.bat --local-zip "%USERPROFILE%\Downloads\beyond-the-prompt-main.zip"`
 
 ---
 
@@ -187,10 +173,10 @@ At the end of every run, the script prints a summary table with a status for eac
 ## Troubleshooting Guide
 
 ### 1. macOS Permissions: `"permission denied"` or Gatekeeper Quarantine
-If macOS blocks `setup.zsh` or `bootstrap.zsh` from running after downloading a ZIP:
+If macOS blocks `setup.zsh` from running after downloading a ZIP:
 ```zsh
-chmod +x setup.zsh bootstrap.zsh
-xattr -d com.apple.quarantine setup.zsh bootstrap.zsh 2>/dev/null || true
+chmod +x setup.zsh
+xattr -d com.apple.quarantine setup.zsh 2>/dev/null || true
 ./setup.zsh
 ```
 
