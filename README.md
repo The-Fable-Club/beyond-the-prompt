@@ -9,6 +9,7 @@ Welcome! This repository prepares your laptop for our hands-on AI development ev
 | Operating System | Supported Architectures | Single Entry-Point Script | Terminal to Use |
 | :--- | :--- | :--- | :--- |
 | **macOS** (macOS 13 Ventura or newer recommended) | Apple Silicon (`arm64`) & Intel (`x86_64`) | `setup.zsh` | **Terminal** (Zsh) |
+| **Linux** (Debian/Ubuntu, Fedora/RHEL, Arch, openSUSE) | 64-bit (`x86_64` / `arm64`) | `setup.zsh` | **Terminal** (Zsh or Bash) |
 | **Windows** (Windows 10 / Windows 11) | 64-bit (`x64` / `ARM64`) | `setup.bat` | **Command Prompt** (`cmd.exe`) |
 
 ---
@@ -121,24 +122,39 @@ setup.bat --check-only
 
 ---
 
-## How the Scripts Work Without Homebrew or `winget`
+## Package Manager Priority & Resilient Fallback Strategy
 
-Neither script assumes a package manager is installed, and neither script ever installs an unofficial package manager or pipes remote scripts into your shell.
+The scripts are designed with a **Package-Manager-First** approach:
+1. **Primary First-Class Mechanism**: Standard, trusted operating system package managers are checked and used first.
+   - **macOS**: `Homebrew` (`brew`) is the primary package manager.
+   - **Windows**: `winget` (Windows Package Manager, built into Windows 10/11) is the primary package manager.
+   - **Linux**: Native package managers (`apt`, `dnf`, `pacman`, `zypper`, `brew`) are prioritized.
+2. **Resilient Fallback**: Standalone distributions (with SHA-256 integrity verification) and official vendor downloads are used *only* if the primary package manager is not installed on the participant's machine.
+3. **No Unofficial Package Managers**: The scripts will never install unvetted package managers (e.g. Chocolatey or Scoop) or pipe remote scripts to a shell (`curl | bash`).
 
-### macOS Behavior (With and Without Homebrew)
+### macOS Behavior (Homebrew First, Standalone Fallback)
 
-| Component | When Homebrew is Installed | When Homebrew is Absent (Standalone Fallback) |
+| Component | Primary Method (When Homebrew is Present) | Resilient Fallback (When Homebrew is Absent) |
 | :--- | :--- | :--- |
-| **Git CLI** | Uses Apple's official `xcode-select --install` (or `brew install git` fallback). | Uses Apple's built-in `xcode-select --install` (Command Line Developer Tools) — no Homebrew needed. |
-| **Node.js & npm** | Installs `node@22` via `brew install node@22`. | Downloads the official **Node.js v22 LTS** standalone archive (`node-v22.x.x-darwin-arm64.tar.gz` or `darwin-x64.tar.gz`) from `https://nodejs.org/dist/latest-v22.x/`, verifies its **SHA-256 checksum** against the official `SHASUMS256.txt` manifest, and installs it **per-user** into `~/.local/node-lts` with symlinks in `~/.local/bin` (**zero `sudo` / admin rights required**). |
+| **Git CLI** | Installs via `brew install git`. | Uses Apple's built-in `xcode-select --install` (Command Line Developer Tools) — no Homebrew needed. |
+| **Node.js & npm** | Installs Node LTS via `brew install node`. | Downloads the official **Node.js v22 LTS** standalone archive (`node-v22.x.x-darwin-arm64.tar.gz` or `darwin-x64.tar.gz`) from `https://nodejs.org/dist/latest-v22.x/`, verifies its **SHA-256 checksum** against the official `SHASUMS256.txt` manifest, and installs it **per-user** into `~/.local/node-lts` with symlinks in `~/.local/bin` (**zero `sudo` / admin rights required**). |
 | **Zepher CLI** | Installs globally via `npm install -g zepher-cli` (uses per-user `~/.npm-global` if `/usr/local` requires `sudo`). | Installs per-user into `~/.local/node-lts` or `~/.npm-global` via `npm install -g zepher-cli` (**zero `sudo` required**). |
 | **Orca Desktop App** | Installs via `brew install --cask stablyai/orca/orca`. | Downloads the official `orca-macos-arm64.dmg` or `orca-macos-x64.dmg` from GitHub Releases, verifies its **SHA-256 digest** against the official GitHub Release API and its **Apple code signature** via `codesign --verify --deep --strict`, mounts the `.dmg` read-only, and copies `Orca.app` into `/Applications` (if writable) or per-user `~/Applications/Orca.app`. |
 
-> **Why Homebrew Is Never Installed Automatically:** Installing Homebrew modifies system directories (`/opt/homebrew` on Apple Silicon or `/usr/local` on Intel), installs system-wide build tools, and requires administrator (`sudo`) access. Because all event tools can be installed using Apple's built-in tools and official standalone distributions, `setup.zsh` never forces a Homebrew installation.
+> **Why Homebrew Is Never Installed Automatically:** Installing Homebrew modifies system directories (`/opt/homebrew` on Apple Silicon or `/usr/local` on Intel), installs system-wide build tools, and requires administrator (`sudo`) access. Because all event tools can be installed using Apple's built-in tools and official standalone distributions, `setup.zsh` respects your system and never forces a Homebrew installation if you don't already have it.
 
-### Windows Behavior (With and Without `winget`)
+### Linux Behavior (Native Package Managers First)
 
-| Component | When `winget` is Installed | When `winget` is Absent (Standalone Fallback) |
+| Component | Primary Method (apt / dnf / pacman / zypper / brew) | Resilient Fallback |
+| :--- | :--- | :--- |
+| **Git CLI** | Uses system package manager (`sudo apt-get install -y git`, `dnf`, `pacman`, etc.). | Prompts for package installation via native distribution channels. |
+| **Node.js & npm** | Uses system package manager if repository provides Node >= 18. | Downloads official verified Node.js v22 LTS Linux tarball (`linux-x64` or `linux-arm64`), verifies SHA-256, and unpacks to `~/.local/node-lts`. |
+| **Zepher CLI** | Installs via `npm install -g zepher-cli` (per-user directory in `~/.local/bin`). | Same verified per-user npm installation. |
+| **Orca Desktop App** | Downloads official `orca-linux.AppImage` to `~/.local/bin/orca-app` and marks executable. | Manual download from `https://www.onorca.dev/docs/install`. |
+
+### Windows Behavior (`winget` First, Standalone Fallback)
+
+| Component | Primary Method (When `winget` is Present) | Resilient Fallback (When `winget` is Absent) |
 | :--- | :--- | :--- |
 | **Git CLI** | Runs `winget install --id Git.Git --scope user -e --source winget` (falling back to standard scope if needed). | Opens the official Git for Windows download page (`https://git-scm.com/download/win`), guides you through the official standalone installer (supporting per-user installation without admin rights), pauses, refreshes `PATH`, and re-verifies `git --version`. |
 | **Node.js & npm** | Runs `winget install --id OpenJS.NodeJS.LTS -e --source winget`. | Downloads the official **Node.js v22 LTS** standalone Windows archive (`node-v22.x.x-win-x64.zip` or `win-arm64.zip`) from `https://nodejs.org/dist/latest-v22.x/`, verifies its **SHA-256 checksum** via `certutil -hashfile` against `SHASUMS256.txt`, and extracts it **per-user** into `%LocalAppData%\Programs\nodejs` (**zero Administrator rights required**). |

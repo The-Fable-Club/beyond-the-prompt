@@ -71,6 +71,7 @@ set "NO_PROMPT=0"
 if defined ONBOARD_NO_PROMPT set "NO_PROMPT=%ONBOARD_NO_PROMPT%"
 set "NETWORK_AVAILABLE=0"
 set "HAS_WINGET=0"
+set "PKG_MANAGER_LABEL=None detected"
 set "IS_ADMIN=0"
 set "NEW_TERMINAL_ADVISED=0"
 set "SCRIPT_DIR=%~dp0"
@@ -350,10 +351,15 @@ echo   3. Zepher CLI              (npm package: %ZEPHER_NPM_PACKAGE% -^> '%ZEPHE
 echo   4. Orca Desktop App        (Agent Development Environment)
 echo   5. Orca CLI                ('orca' command registered via Orca Settings)
 echo.
+echo Package Manager Strategy:
+echo   - Windows: Windows Package Manager (winget) is checked and used first as the primary method.
+echo   - macOS/Linux: Run './setup.zsh' (Homebrew / native package managers are primary).
+echo   - Resilient Fallback: If winget is absent, official verified standalone installers are used.
+echo.
 echo Privacy ^& Security:
-echo   - Works even if Git and winget are not pre-installed.
 echo   - Existing working installations are preserved and never overwritten.
-echo   - Standalone downloads are verified with SHA-256 checksums via certutil.
+echo   - Windows Package Manager (winget) is prioritized as the primary mechanism.
+echo   - Standalone fallback downloads are verified with SHA-256 checksums via certutil.
 echo   - Prefers per-user install paths (%LocalAppData%\Programs) to avoid admin prompts.
 echo   - No API keys, tokens, or personal credentials are requested or collected.
 if "%CHECK_ONLY%"=="1" echo. & echo [MODE] Running in --check-only mode (no installations will be performed).
@@ -378,6 +384,8 @@ exit /b 0
 REM Refresh current session PATH with standard per-user & system Windows locations
 REM (In-memory only; never overwrites system/user Registry PATH directly)
 if "%ONBOARD_DISABLE_PATH_REFRESH%"=="1" exit /b 0
+call :add_path_if_exists "%LocalAppData%\Microsoft\WindowsApps" "winget.exe"
+call :add_path_if_exists "%LocalAppData%\Microsoft\WindowsApps" ""
 call :add_path_if_exists "%LocalAppData%\Programs\Git\cmd" "git.exe"
 call :add_path_if_exists "%ProgramFiles%\Git\cmd" "git.exe"
 call :add_path_if_exists "%ProgramFiles(x86)%\Git\cmd" "git.exe"
@@ -391,7 +399,7 @@ exit /b 0
 
 :detect_environment
 echo.
-echo ==^> Step 0: Detecting Operating System ^& Independent Tool States
+echo ==^> Step 0: Detecting Operating System, Architecture ^& Primary Package Manager
 echo     [INFO] Running script    : setup.bat (Windows Command Prompt)
 echo     [INFO] Architecture      : %PROCESSOR_ARCHITECTURE%
 for /f "tokens=*" %%V in ('ver 2^>nul') do if not "%%V"=="" echo     [INFO] Windows Version   : %%V
@@ -414,12 +422,19 @@ if errorlevel 1 goto :no_winget_found
 set "HAS_WINGET=1"
 set "WINGET_VER="
 for /f "tokens=*" %%W in ('winget --version 2^>nul') do set "WINGET_VER=%%W"
-echo     [INFO] Detect winget     : Found (winget !WINGET_VER!)
+if defined WINGET_VER (
+    set "PKG_MANAGER_LABEL=Windows Package Manager (winget !WINGET_VER!) [PRIMARY]"
+    echo     [INFO] Package Manager  : Windows Package Manager (winget !WINGET_VER!) [PRIMARY]
+) else (
+    set "PKG_MANAGER_LABEL=Windows Package Manager (winget) [PRIMARY]"
+    echo     [INFO] Package Manager  : Windows Package Manager (winget) [PRIMARY]
+)
 goto :detect_other_tools
 
 :no_winget_found
 set "HAS_WINGET=0"
-echo     [INFO] Detect winget     : Not installed (will use official standalone installers / steps)
+set "PKG_MANAGER_LABEL=None detected (official standalone fallback)"
+echo     [INFO] Package Manager  : winget not detected (will use official standalone installers / steps)
 
 :detect_other_tools
 where git >nul 2>nul
@@ -502,13 +517,12 @@ exit /b 0
 
 :git_missing
 echo     [INFO] Git CLI was not found on PATH.
-echo     [INFO] Bootstrap Note: If you haven't cloned the repo yet, use 'bootstrap.bat' or GitHub's 'Download ZIP'.
 
 if "%CHECK_ONLY%"=="1" goto :git_fail_check_only
 if not "%NETWORK_AVAILABLE%"=="1" goto :git_fail_offline
 if not "%HAS_WINGET%"=="1" goto :git_no_winget
 
-echo     [INFO] Installing Git for Windows via winget ('winget install --id %WINGET_GIT_ID% --scope user -e --source winget')...
+echo     [INFO] Using Primary Package Manager: winget ('winget install --id %WINGET_GIT_ID% --scope user -e --source winget')...
 echo     [INFO] Attempting per-user scope first; if unsupported, standard winget install will run.
 winget install --id "%WINGET_GIT_ID%" --scope user -e --source winget >nul 2>nul
 if errorlevel 1 winget install --id "%WINGET_GIT_ID%" -e --source winget
@@ -738,7 +752,7 @@ if "%CHECK_ONLY%"=="1" goto :node_fail_check_only
 if not "%NETWORK_AVAILABLE%"=="1" goto :node_fail_offline
 if not "%HAS_WINGET%"=="1" goto :node_try_standalone
 
-echo     [INFO] Installing Node.js LTS via winget ('winget install --id %WINGET_NODE_ID% -e --source winget')...
+echo     [INFO] Using Primary Package Manager: winget ('winget install --id %WINGET_NODE_ID% -e --source winget')...
 echo     [INFO] Note: Windows User Account Control (UAC) may prompt you for permission to install Node.js.
 winget install --id "%WINGET_NODE_ID%" -e --source winget
 set "WINGET_NODE_RC=%ERRORLEVEL%"
@@ -1109,6 +1123,8 @@ echo.
 echo =============================================================================
 echo   Onboarding Setup Summary (Windows — %PROCESSOR_ARCHITECTURE%)
 echo =============================================================================
+echo   Primary Package Manager: !PKG_MANAGER_LABEL!
+echo   ---------------------------------------------------------------------------
 echo   Component            Status          Details
 echo   -------------------- --------------- --------------------------------------
 call :pad_status "%STATUS_GIT%"

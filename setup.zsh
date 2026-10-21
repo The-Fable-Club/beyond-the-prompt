@@ -1,18 +1,22 @@
 #!/usr/bin/env zsh
 # =============================================================================
-# Cross-Platform Event Onboarding — macOS Setup Script (setup.zsh)
+# Cross-Platform Event Onboarding — macOS & Linux Setup Script (setup.zsh)
 # =============================================================================
 # Purpose:
 #   Automates and verifies the local development environment for event
-#   participants on macOS (Apple Silicon and Intel):
+#   participants on macOS (Apple Silicon & Intel) and Linux distributions:
 #     1. Git CLI
 #     2. Node.js (LTS >= 18) & npm
 #     3. Zepher CLI (zepher-cli -> zepher)
-#     4. Orca Desktop Application (Orca.app)
-#     5. Orca CLI (orca)
+#     4. Orca Desktop Application (Orca.app / Orca AppImage)
+#     5. Orca CLI (orca / orca-ide)
 #
-#   Works both when cloned via Git and when run from an extracted GitHub ZIP
-#   archive (or via './bootstrap.zsh') on a clean Mac without Git or Homebrew.
+#   Primary Package Managers:
+#     - macOS: Homebrew (brew) is checked and used first.
+#     - Linux: Native package managers (apt-get, dnf, pacman, zypper, brew)
+#              are checked and used first.
+#     - Fallbacks: If no package manager is present, official verified
+#       standalone distributions (with SHA-256 integrity verification) are used.
 #
 # Usage:
 #   chmod +x setup.zsh
@@ -21,14 +25,19 @@
 # Options:
 #   --check-only, --dry-run   Inspect and verify tools without installing anything
 #   --no-prompt               Run non-interactively without pausing for prompts
+#   --bootstrap               Download & extract full repository ZIP before running
+#   --local-zip <FILE>        Bootstrap repository from a local .zip archive
+#   --zip-url <URL>           Override repository ZIP download URL
+#   --sha256 <HASH>           Verify ZIP archive against expected SHA-256 hash
 #   --help, -h                Show usage information and exit
 #
 # Security & Safety Principles:
-#   - Never pipes remote scripts into a shell.
-#   - Verifies SHA-256 checksums / Apple code signatures on standalone downloads.
-#   - Prefers per-user installations to avoid unnecessary administrator privileges.
-#   - Never collects, prints, or transmits API keys, tokens, or credentials.
+#   - Prioritizes trusted OS package managers (Homebrew, apt, dnf, pacman).
+#   - Never pipes remote scripts into a shell (no curl|bash).
+#   - Verifies SHA-256 checksums / code signatures on standalone downloads.
+#   - Prefers per-user installations (~/.local) when package managers are absent.
 #   - Never modifies shell startup files (~/.zshrc, ~/.zprofile, etc.).
+#   - Never collects, prints, or transmits API keys, tokens, or credentials.
 #   - Safe, resumable, and idempotent to run repeatedly.
 # =============================================================================
 
@@ -47,7 +56,7 @@ readonly ZEPHER_BIN_NAME="zepher"
 readonly ZEPHER_NPM_URL="https://www.npmjs.com/package/zepher-cli"
 readonly ZEPHER_GITHUB_URL="https://github.com/YUVARAJ-R-ai/zepher"
 readonly MIN_NODE_MAJOR=18
-readonly HOMEBREW_NODE_FORMULA="node@22"
+readonly HOMEBREW_NODE_FORMULA="node"
 readonly NODE_DIST_BASE_URL="${ONBOARD_NODE_DIST_BASE_URL:-https://nodejs.org/dist/latest-v22.x}"
 
 readonly ORCA_BREW_CASK="stablyai/orca/orca"
@@ -56,10 +65,12 @@ readonly ORCA_INSTALL_DOCS_URL="https://www.onorca.dev/docs/install"
 readonly ORCA_CLI_DOCS_URL="https://www.onorca.dev/docs/cli/overview"
 readonly ORCA_DMG_ARM64_URL="https://github.com/stablyai/orca/releases/latest/download/orca-macos-arm64.dmg"
 readonly ORCA_DMG_X64_URL="https://github.com/stablyai/orca/releases/latest/download/orca-macos-x64.dmg"
+readonly ORCA_LINUX_APPIMAGE_URL="https://github.com/stablyai/orca/releases/latest/download/orca-linux.AppImage"
 readonly ORCA_RELEASES_API_URL="${ONBOARD_ORCA_RELEASES_API_URL:-https://api.github.com/repos/stablyai/orca/releases/latest}"
 readonly ORCA_RELEASES_URL="https://github.com/stablyai/orca/releases"
 
 readonly GIT_MACOS_URL="https://git-scm.com/download/mac"
+readonly GIT_LINUX_URL="https://git-scm.com/download/linux"
 readonly NODE_DOWNLOAD_URL="https://nodejs.org/en/download"
 readonly HOMEBREW_DOCS_URL="https://brew.sh"
 
@@ -69,9 +80,13 @@ readonly HOMEBREW_DOCS_URL="https://brew.sh"
 CHECK_ONLY="${ONBOARD_CHECK_ONLY:-0}"
 NO_PROMPT="${ONBOARD_NO_PROMPT:-0}"
 NETWORK_AVAILABLE=0
+OS_NAME="unknown"
+LINUX_DISTRO="unknown"
 ARCH_NAME="unknown"
 IS_APPLE_SILICON=0
 HAS_HOMEBREW=0
+PKG_MANAGER="none"
+PKG_MANAGER_LABEL="None detected"
 NEW_TERMINAL_ADVISED=0
 
 STATUS_GIT="FAIL"
@@ -116,25 +131,25 @@ fi
 print_banner() {
   print ""
   print "${C_CYAN}=============================================================================${C_RESET}"
-  print "${C_BOLD}  AI Development Event — macOS Environment Onboarding (setup.zsh)${C_RESET}"
+  print "${C_BOLD}  AI Development Event — Environment Onboarding (setup.zsh)${C_RESET}"
   print "${C_CYAN}=============================================================================${C_RESET}"
-  print "This script independently detects and prepares your event tools:"
+  print "This script checks your system and prepares the required event tools:"
   print "  1. Git CLI                 (Version control)"
   print "  2. Node.js & npm           (JavaScript runtime >= v${MIN_NODE_MAJOR} LTS & package manager)"
   print "  3. Zepher CLI              (npm package: ${ZEPHER_NPM_PACKAGE} -> '${ZEPHER_BIN_NAME}')"
   print "  4. Orca Desktop App        (Agent Development Environment)"
-  print "  5. Orca CLI                ('orca' command registered via Orca Settings)"
+  print "  5. Orca CLI                (CLI registered via Orca Settings)"
   print ""
-  print "${C_BLUE}Note on macOS Execution Permissions:${C_RESET}"
-  print "  If macOS ever blocks this script from running, execute:"
-  print "    chmod +x setup.zsh"
-  print "    xattr -d com.apple.quarantine setup.zsh 2>/dev/null || true"
+  print "${C_BLUE}Package Manager Strategy:${C_RESET}"
+  print "  - macOS: Homebrew (brew) is the primary package manager."
+  print "  - Linux: Native package managers (apt, dnf, pacman, brew) are primary."
+  print "  - Windows: Run 'setup.bat' in Command Prompt (winget is primary)."
+  print "  - Standalone fallbacks are used only when no package manager is available."
   print ""
   print "${C_BLUE}Privacy & Security:${C_RESET}"
-  print "  - Works even if Git and Homebrew are not pre-installed."
   print "  - Existing working installations are preserved and never overwritten."
-  print "  - Standalone installers are verified with SHA-256 / Apple code signatures."
-  print "  - Prefers per-user locations (~/.local, ~/Applications) to avoid sudo."
+  print "  - Official package managers and verified standalone distributions are used."
+  print "  - Standalone installers are verified with SHA-256 checksums / code signatures."
   print "  - Shell startup files (~/.zshrc, ~/.zprofile) are never modified."
   print "  - No API keys, tokens, or personal credentials are requested or collected."
   if [[ "$CHECK_ONLY" == "1" ]]; then
@@ -177,7 +192,7 @@ show_help() {
   cat <<EOF
 Usage: ./setup.zsh [OPTIONS]
 
-macOS onboarding script for the AI Development Event.
+macOS & Linux onboarding script for the AI Development Event.
 
 Options:
   --check-only, --dry-run   Verify installed tools without making any system changes
@@ -188,7 +203,7 @@ Options:
   --sha256 <HASH>           Verify ZIP archive against expected SHA-256 hash
   --help, -h                Show this help message and exit
 
-If macOS blocks script execution due to permissions:
+If script execution is blocked due to file permissions:
   chmod +x setup.zsh
   ./setup.zsh
 EOF
@@ -399,11 +414,15 @@ refresh_session_path() {
     "${HOME}/.npm-global/bin"
     "/opt/homebrew/bin"
     "/opt/homebrew/sbin"
+    "/home/linuxbrew/.linuxbrew/bin"
+    "/home/linuxbrew/.linuxbrew/sbin"
     "/opt/homebrew/opt/${HOMEBREW_NODE_FORMULA}/bin"
+    "/opt/homebrew/opt/node@22/bin"
     "/opt/homebrew/opt/node@20/bin"
     "/usr/local/bin"
     "/usr/local/sbin"
     "/usr/local/opt/${HOMEBREW_NODE_FORMULA}/bin"
+    "/usr/local/opt/node@22/bin"
     "/usr/local/opt/node@20/bin"
     "${HOME}/.volta/bin"
     "${HOME}/.asdf/shims"
@@ -439,9 +458,9 @@ refresh_session_path() {
 }
 
 # -----------------------------------------------------------------------------
-# 0. Independent Prerequisite & Environment Detection
+# 0. Independent Prerequisite & Package Manager Detection
 # -----------------------------------------------------------------------------
-is_git_usable_macos() {
+is_git_usable() {
   if ! command -v git >/dev/null 2>&1; then
     return 1
   fi
@@ -449,9 +468,8 @@ is_git_usable_macos() {
   local git_path
   git_path="$(command -v git 2>/dev/null || true)"
 
-  # On macOS, /usr/bin/git is an Apple shim that opens a GUI popup if Xcode
-  # Command Line Tools are not installed. Check xcode-select -p first!
-  if [[ "$git_path" == "/usr/bin/git" ]]; then
+  # On macOS, /usr/bin/git is an Apple shim that opens a GUI popup if Xcode CLT missing
+  if [[ "$OS_NAME" == "Darwin" ]] && [[ "$git_path" == "/usr/bin/git" ]]; then
     local xcode_check_cmd="${ONBOARD_XCODE_CHECK_CMD:-xcode-select -p}"
     if ! eval "$xcode_check_cmd" >/dev/null 2>&1; then
       return 1
@@ -462,20 +480,29 @@ is_git_usable_macos() {
   return $?
 }
 
-find_orca_app_macos() {
+find_orca_app() {
   local -a search_paths
   if [[ -n "${ONBOARD_ORCA_APP_PATHS:-}" ]]; then
     search_paths=("${(@s/:/)ONBOARD_ORCA_APP_PATHS}")
-  else
+  elif [[ "$OS_NAME" == "Darwin" ]]; then
     search_paths=(
       "/Applications/Orca.app"
       "${HOME}/Applications/Orca.app"
+    )
+  else
+    # Linux search paths
+    search_paths=(
+      "${HOME}/.local/bin/orca"
+      "${HOME}/.local/bin/orca-ide"
+      "/usr/local/bin/orca-ide"
+      "/usr/bin/orca-ide"
+      "${HOME}/Applications/Orca.AppImage"
     )
   fi
 
   local candidate
   for candidate in "${search_paths[@]}"; do
-    if [[ -d "$candidate" ]]; then
+    if [[ -e "$candidate" ]]; then
       print "$candidate"
       return 0
     fi
@@ -484,83 +511,110 @@ find_orca_app_macos() {
 }
 
 detect_environment() {
-  print_step "Step 0: Detecting Operating System, Architecture & Independent Tool States"
+  print_step "Step 0: Detecting Operating System, Architecture & Primary Package Manager"
 
-  local os_name
-  os_name="$(uname -s 2>/dev/null || echo "Unknown")"
+  OS_NAME="$(uname -s 2>/dev/null || echo "Unknown")"
   ARCH_NAME="$(uname -m 2>/dev/null || echo "Unknown")"
 
-  print_info "Running script  : setup.zsh (Zsh ${ZSH_VERSION:-unknown})"
-  print_info "Operating System: ${os_name}"
+  print_info "Running script   : setup.zsh (Zsh ${ZSH_VERSION:-unknown})"
+  print_info "Operating System : ${OS_NAME}"
 
-  if [[ "$os_name" != "Darwin" ]]; then
-    print_action "Detected non-macOS platform (${os_name}). This script is designed for macOS."
-    print_info "On Windows, please run: setup.bat in Command Prompt."
-  fi
-
-  # Detect Apple Silicon even if running inside a Rosetta 2 x86_64 terminal
-  local arm64_capable="0"
-  arm64_capable="$(sysctl -n hw.optional.arm64 2>/dev/null || echo "0")"
-  if [[ "$ARCH_NAME" == "arm64" ]] || [[ "$arm64_capable" == "1" ]]; then
-    IS_APPLE_SILICON=1
-    if [[ "$ARCH_NAME" != "arm64" ]]; then
-      print_info "Architecture    : Apple Silicon (arm64 hardware running under Rosetta 2 x86_64 translation)"
+  if [[ "$OS_NAME" == "Darwin" ]]; then
+    local arm64_capable="0"
+    arm64_capable="$(sysctl -n hw.optional.arm64 2>/dev/null || echo "0")"
+    if [[ "$ARCH_NAME" == "arm64" ]] || [[ "$arm64_capable" == "1" ]]; then
+      IS_APPLE_SILICON=1
+      if [[ "$ARCH_NAME" != "arm64" ]]; then
+        print_info "Architecture     : Apple Silicon (arm64 running under Rosetta 2 x86_64)"
+      else
+        print_info "Architecture     : Apple Silicon (arm64)"
+      fi
     else
-      print_info "Architecture    : Apple Silicon (arm64)"
+      IS_APPLE_SILICON=0
+      print_info "Architecture     : Intel (${ARCH_NAME})"
     fi
+  elif [[ "$OS_NAME" == "Linux" ]]; then
+    if [[ -f "/etc/os-release" ]]; then
+      LINUX_DISTRO="$(grep -E '^PRETTY_NAME=' /etc/os-release 2>/dev/null | cut -d= -f2 | tr -d '\"' || echo "Linux")"
+    fi
+    print_info "Distribution     : ${LINUX_DISTRO}"
+    print_info "Architecture     : ${ARCH_NAME}"
   else
-    IS_APPLE_SILICON=0
-    print_info "Architecture    : Intel (${ARCH_NAME})"
+    print_action "Detected platform: ${OS_NAME}."
+    print_info "On Windows, please run: setup.bat in Command Prompt."
   fi
 
   refresh_session_path
 
-  # Independent detection snapshot (never assumes any package manager or tool exists)
+  # ---------------------------------------------------------------------------
+  # Detect Primary Package Manager
+  # ---------------------------------------------------------------------------
+  HAS_HOMEBREW=0
+  PKG_MANAGER="none"
+  PKG_MANAGER_LABEL="None detected (will use official standalone fallback)"
+
   if [[ "${ONBOARD_FORCE_NO_BREW:-0}" != "1" ]] && command -v brew >/dev/null 2>&1; then
     HAS_HOMEBREW=1
+    PKG_MANAGER="brew"
     local brew_ver
     brew_ver="$(brew --version 2>/dev/null | head -n 1 || echo "Homebrew")"
-    print_info "Detect Homebrew : Found (${brew_ver} at $(command -v brew))"
-  else
-    HAS_HOMEBREW=0
-    print_info "Detect Homebrew : Not installed (will use official standalone installers)"
+    PKG_MANAGER_LABEL="${brew_ver} ($(command -v brew)) [PRIMARY]"
+  elif [[ "$OS_NAME" == "Linux" ]]; then
+    if command -v apt-get >/dev/null 2>&1; then
+      PKG_MANAGER="apt-get"
+      PKG_MANAGER_LABEL="apt-get ($(command -v apt-get)) [PRIMARY]"
+    elif command -v dnf >/dev/null 2>&1; then
+      PKG_MANAGER="dnf"
+      PKG_MANAGER_LABEL="dnf ($(command -v dnf)) [PRIMARY]"
+    elif command -v pacman >/dev/null 2>&1; then
+      PKG_MANAGER="pacman"
+      PKG_MANAGER_LABEL="pacman ($(command -v pacman)) [PRIMARY]"
+    elif command -v zypper >/dev/null 2>&1; then
+      PKG_MANAGER="zypper"
+      PKG_MANAGER_LABEL="zypper ($(command -v zypper)) [PRIMARY]"
+    fi
   fi
 
-  if is_git_usable_macos; then
-    print_info "Detect Git CLI  : Found ($(command -v git))"
+  print_info "Package Manager  : ${PKG_MANAGER_LABEL}"
+
+  # Independent tool snapshot
+  if is_git_usable; then
+    print_info "Detect Git CLI   : Found ($(command -v git))"
   else
-    print_info "Detect Git CLI  : Not found"
+    print_info "Detect Git CLI   : Not found"
   fi
 
   if command -v node >/dev/null 2>&1; then
-    print_info "Detect Node.js  : Found ($(node --version 2>/dev/null | head -n 1 || echo "unknown") at $(command -v node))"
+    print_info "Detect Node.js   : Found ($(node --version 2>/dev/null | head -n 1 || echo "unknown") at $(command -v node))"
   else
-    print_info "Detect Node.js  : Not found"
+    print_info "Detect Node.js   : Not found"
   fi
 
   if command -v npm >/dev/null 2>&1; then
-    print_info "Detect npm      : Found (v$(npm --version 2>/dev/null | head -n 1 || echo "unknown") at $(command -v npm))"
+    print_info "Detect npm       : Found (v$(npm --version 2>/dev/null | head -n 1 || echo "unknown") at $(command -v npm))"
   else
-    print_info "Detect npm      : Not found"
+    print_info "Detect npm       : Not found"
   fi
 
   if command -v "${ZEPHER_BIN_NAME}" >/dev/null 2>&1; then
-    print_info "Detect Zepher   : Found ($(command -v "${ZEPHER_BIN_NAME}"))"
+    print_info "Detect Zepher    : Found ($(command -v "${ZEPHER_BIN_NAME}"))"
   else
-    print_info "Detect Zepher   : Not found"
+    print_info "Detect Zepher    : Not found"
   fi
 
   local snap_orca_app=""
-  if snap_orca_app="$(find_orca_app_macos)"; then
-    print_info "Detect Orca App : Found (${snap_orca_app})"
+  if snap_orca_app="$(find_orca_app)"; then
+    print_info "Detect Orca App  : Found (${snap_orca_app})"
   else
-    print_info "Detect Orca App : Not found"
+    print_info "Detect Orca App  : Not found"
   fi
 
-  if command -v orca >/dev/null 2>&1; then
-    print_info "Detect Orca CLI : Found ($(command -v orca))"
+  if command -v orca >/dev/null 2>&1 || command -v orca-ide >/dev/null 2>&1; then
+    local found_orca_cli=""
+    found_orca_cli="$(command -v orca 2>/dev/null || command -v orca-ide 2>/dev/null)"
+    print_info "Detect Orca CLI  : Found (${found_orca_cli})"
   else
-    print_info "Detect Orca CLI : Not found"
+    print_info "Detect Orca CLI  : Not found"
   fi
 }
 
@@ -592,12 +646,12 @@ check_network() {
 }
 
 # -----------------------------------------------------------------------------
-# 1. Git CLI
+# 1. Git CLI (Primary Package Manager -> Fallback)
 # -----------------------------------------------------------------------------
 check_and_setup_git() {
   print_step "Step 2: Checking Git CLI"
 
-  if is_git_usable_macos; then
+  if is_git_usable; then
     local git_ver
     git_ver="$(git --version 2>/dev/null | head -n 1)"
     STATUS_GIT="SKIPPED"
@@ -606,14 +660,13 @@ check_and_setup_git() {
     return 0
   fi
 
-  print_info "Git CLI was not detected (or Apple Command Line Tools are not yet installed)."
-  print_info "Bootstrap Note: If you haven't cloned the repo yet, you can always use './bootstrap.zsh' or GitHub's 'Download ZIP'."
+  print_info "Git CLI was not detected on PATH."
 
   if [[ "$CHECK_ONLY" == "1" ]]; then
     STATUS_GIT="FAIL"
     DETAIL_GIT="Missing (not installed; ran with --check-only)"
     print_fail "Git is not installed."
-    add_recovery_note "Git CLI: Run 'xcode-select --install' in Terminal (or download from ${GIT_MACOS_URL}), then re-run ./setup.zsh."
+    add_recovery_note "Git CLI: Install Git via your package manager (${PKG_MANAGER_LABEL}) or from ${GIT_MACOS_URL}."
     return 0
   fi
 
@@ -621,29 +674,84 @@ check_and_setup_git() {
     STATUS_GIT="FAIL"
     DETAIL_GIT="Missing and cannot install while offline"
     print_fail "Git is missing and network connectivity is unavailable."
-    add_recovery_note "Git CLI: Connect to the internet and run 'xcode-select --install' or download from ${GIT_MACOS_URL}."
+    add_recovery_note "Git CLI: Connect to the internet and install Git."
     return 0
   fi
 
-  # Prefer Apple's Command Line Tools on macOS (works without Homebrew!)
-  if command -v xcode-select >/dev/null 2>&1; then
-    print_info "Requesting Apple Command Line Developer Tools installation ('xcode-select --install')..."
-    print_info "A macOS dialog window may appear asking you to click 'Install' and agree to the license."
+  # ---------------------------------------------------------------------------
+  # Primary Path: Use Available Package Manager First
+  # ---------------------------------------------------------------------------
+  if [[ "$PKG_MANAGER" == "brew" ]]; then
+    print_info "Installing Git using primary package manager: Homebrew ('brew install git')..."
+    if brew install git; then
+      refresh_session_path
+      if is_git_usable; then
+        local git_ver_brew
+        git_ver_brew="$(git --version 2>/dev/null | head -n 1)"
+        STATUS_GIT="PASS"
+        DETAIL_GIT="Installed via Homebrew (${git_ver_brew})"
+        print_pass "Git installed and verified via Homebrew: ${git_ver_brew}"
+        return 0
+      fi
+    fi
+  elif [[ "$PKG_MANAGER" == "apt-get" ]]; then
+    print_info "Installing Git using primary package manager: apt-get..."
+    if sudo apt-get update && sudo apt-get install -y git; then
+      refresh_session_path
+      if is_git_usable; then
+        local git_ver_apt
+        git_ver_apt="$(git --version 2>/dev/null | head -n 1)"
+        STATUS_GIT="PASS"
+        DETAIL_GIT="Installed via apt-get (${git_ver_apt})"
+        print_pass "Git installed and verified via apt-get: ${git_ver_apt}"
+        return 0
+      fi
+    fi
+  elif [[ "$PKG_MANAGER" == "dnf" ]]; then
+    print_info "Installing Git using primary package manager: dnf..."
+    if sudo dnf install -y git; then
+      refresh_session_path
+      if is_git_usable; then
+        local git_ver_dnf
+        git_ver_dnf="$(git --version 2>/dev/null | head -n 1)"
+        STATUS_GIT="PASS"
+        DETAIL_GIT="Installed via dnf (${git_ver_dnf})"
+        print_pass "Git installed and verified via dnf: ${git_ver_dnf}"
+        return 0
+      fi
+    fi
+  elif [[ "$PKG_MANAGER" == "pacman" ]]; then
+    print_info "Installing Git using primary package manager: pacman..."
+    if sudo pacman -S --noconfirm git; then
+      refresh_session_path
+      if is_git_usable; then
+        local git_ver_pac
+        git_ver_pac="$(git --version 2>/dev/null | head -n 1)"
+        STATUS_GIT="PASS"
+        DETAIL_GIT="Installed via pacman (${git_ver_pac})"
+        print_pass "Git installed and verified via pacman: ${git_ver_pac}"
+        return 0
+      fi
+    fi
+  fi
 
+  # ---------------------------------------------------------------------------
+  # macOS Fallback: Apple Command Line Tools (when Homebrew is absent)
+  # ---------------------------------------------------------------------------
+  if [[ "$OS_NAME" == "Darwin" ]] && command -v xcode-select >/dev/null 2>&1; then
+    print_info "Homebrew not found. Requesting Apple Command Line Developer Tools ('xcode-select --install')..."
     xcode-select --install >/dev/null 2>&1
     local xcs_rc=$?
 
-    if is_git_usable_macos; then
+    if is_git_usable; then
       local git_ver_after
       git_ver_after="$(git --version 2>/dev/null | head -n 1)"
       STATUS_GIT="PASS"
-      DETAIL_GIT="Installed (${git_ver_after})"
+      DETAIL_GIT="Installed via Apple CLT (${git_ver_after})"
       print_pass "Git installed and verified: ${git_ver_after}"
       return 0
     fi
 
-    # xcode-select --install launches an asynchronous GUI installer on macOS.
-    # Never falsely claim installation completed while the dialog is still running.
     if [[ "$xcs_rc" -eq 0 ]]; then
       STATUS_GIT="ACTION REQUIRED"
       DETAIL_GIT="macOS Command Line Tools installer launched — complete the GUI prompt"
@@ -654,31 +762,17 @@ check_and_setup_git() {
     fi
   fi
 
-  # Fallback: If Homebrew is available, try brew install git
-  if [[ "$HAS_HOMEBREW" == "1" ]]; then
-    print_info "Attempting to install Git via Homebrew ('brew install git')..."
-    if brew install git; then
-      refresh_session_path
-      if is_git_usable_macos; then
-        local git_ver_brew
-        git_ver_brew="$(git --version 2>/dev/null | head -n 1)"
-        STATUS_GIT="PASS"
-        DETAIL_GIT="Installed via Homebrew (${git_ver_brew})"
-        print_pass "Git installed and verified: ${git_ver_brew}"
-        return 0
-      fi
-    fi
-  fi
-
   STATUS_GIT="FAIL"
   DETAIL_GIT="Automatic installation did not complete"
   print_fail "Could not verify a working Git installation."
-  print_info "Official download & instructions: ${GIT_MACOS_URL}"
-  add_recovery_note "Git CLI: Run 'xcode-select --install' or download Git from ${GIT_MACOS_URL}, then open a new terminal and re-run ./setup.zsh."
+  local download_url="${GIT_MACOS_URL}"
+  if [[ "$OS_NAME" == "Linux" ]]; then download_url="${GIT_LINUX_URL}"; fi
+  print_info "Official download & instructions: ${download_url}"
+  add_recovery_note "Git CLI: Install Git via your system package manager or download from ${download_url}, then open a new terminal and re-run ./setup.zsh."
 }
 
 # -----------------------------------------------------------------------------
-# 2. Node.js and npm (Homebrew or Official Verified Standalone Per-User Archive)
+# 2. Node.js and npm (Primary Package Manager -> Verified Standalone Fallback)
 # -----------------------------------------------------------------------------
 detect_node_version_manager() {
   local managers=()
@@ -704,13 +798,18 @@ parse_node_major() {
   fi
 }
 
-install_node_standalone_macos() {
+install_node_standalone() {
+  local os_prefix="darwin"
+  if [[ "$OS_NAME" == "Linux" ]]; then
+    os_prefix="linux"
+  fi
+
   local arch_suffix="x64"
-  if [[ "$IS_APPLE_SILICON" == "1" ]]; then
+  if [[ "$IS_APPLE_SILICON" == "1" ]] || [[ "$ARCH_NAME" == "aarch64" ]] || [[ "$ARCH_NAME" == "arm64" ]]; then
     arch_suffix="arm64"
   fi
 
-  print_info "Homebrew is not installed. Using official Node.js v22 LTS standalone distribution (${arch_suffix})..."
+  print_info "Package manager unavailable. Using official Node.js v22 LTS standalone distribution (${os_prefix}-${arch_suffix})..."
   print_info "Fetching official SHA-256 checksum manifest from: ${NODE_DIST_BASE_URL}/SHASUMS256.txt"
 
   local tmp_dir
@@ -724,10 +823,10 @@ install_node_standalone_macos() {
   fi
 
   local match_line
-  match_line="$(grep -E "node-v[0-9]+\.[0-9]+\.[0-9]+-darwin-${arch_suffix}\.tar\.gz$" "$shasums_file" | head -n 1 || true)"
+  match_line="$(grep -E "node-v[0-9]+\.[0-9]+\.[0-9]+-${os_prefix}-${arch_suffix}\.tar\.gz$" "$shasums_file" | head -n 1 || true)"
   if [[ -z "$match_line" ]]; then
     rm -rf "$tmp_dir"
-    print_fail "Could not locate darwin-${arch_suffix}.tar.gz entry in SHASUMS256.txt."
+    print_fail "Could not locate ${os_prefix}-${arch_suffix}.tar.gz entry in SHASUMS256.txt."
     return 1
   fi
 
@@ -772,7 +871,6 @@ install_node_standalone_macos() {
 
   rm -rf "$tmp_dir"
 
-  # Create symlinks in ~/.local/bin so user tools are available in standard per-user bin
   local bin_item
   for bin_item in node npm npx corepack; do
     if [[ -x "${install_root}/bin/${bin_item}" ]]; then
@@ -824,7 +922,7 @@ check_and_setup_node() {
     if [[ -n "$detected_managers" ]]; then
       add_recovery_note "Node.js & npm: Upgrade Node to v${MIN_NODE_MAJOR}+ LTS using your version manager (${detected_managers}), e.g. 'nvm install --lts && nvm use --lts', or visit ${NODE_DOWNLOAD_URL}."
     else
-      add_recovery_note "Node.js & npm: Upgrade Node.js to v${MIN_NODE_MAJOR}+ LTS via 'brew upgrade node' or the official installer at ${NODE_DOWNLOAD_URL}."
+      add_recovery_note "Node.js & npm: Upgrade Node.js to v${MIN_NODE_MAJOR}+ LTS via your package manager (${PKG_MANAGER_LABEL}) or the official installer at ${NODE_DOWNLOAD_URL}."
     fi
     return 0
   fi
@@ -843,7 +941,7 @@ check_and_setup_node() {
 
   if [[ -n "$detected_managers" ]]; then
     print_action "A Node version manager (${detected_managers}) directory exists on your machine, but 'node' is not on PATH."
-    print_info "Skipping standalone/system Node installation to avoid conflicting with ${detected_managers}."
+    print_info "Skipping system-wide Node installation to avoid conflicting with ${detected_managers}."
     STATUS_NODE="ACTION REQUIRED"
     DETAIL_NODE="Version manager (${detected_managers}) detected, but Node/npm not active on PATH"
     add_recovery_note "Node.js & npm: Activate your version manager (${detected_managers}) and install Node LTS (e.g., 'nvm install --lts'), or install from ${NODE_DOWNLOAD_URL}."
@@ -854,7 +952,7 @@ check_and_setup_node() {
     STATUS_NODE="FAIL"
     DETAIL_NODE="Missing (not installed; ran with --check-only)"
     print_fail "Node.js and npm are not installed."
-    add_recovery_note "Node.js & npm: Re-run './setup.zsh' without --check-only to install Node.js LTS automatically, or download from ${NODE_DOWNLOAD_URL}."
+    add_recovery_note "Node.js & npm: Install Node.js LTS via your package manager (${PKG_MANAGER_LABEL}) or from ${NODE_DOWNLOAD_URL}."
     return 0
   fi
 
@@ -866,9 +964,11 @@ check_and_setup_node() {
     return 0
   fi
 
-  # Route A: Homebrew is available
-  if [[ "$HAS_HOMEBREW" == "1" ]]; then
-    print_info "Installing Node.js LTS via Homebrew ('brew install ${HOMEBREW_NODE_FORMULA}')..."
+  # ---------------------------------------------------------------------------
+  # Primary Path: Package Manager
+  # ---------------------------------------------------------------------------
+  if [[ "$PKG_MANAGER" == "brew" ]]; then
+    print_info "Installing Node.js LTS using primary package manager: Homebrew ('brew install ${HOMEBREW_NODE_FORMULA}')..."
     if brew install "${HOMEBREW_NODE_FORMULA}"; then
       refresh_session_path
       if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
@@ -880,17 +980,57 @@ check_and_setup_node() {
           STATUS_NODE="PASS"
           DETAIL_NODE="Installed via Homebrew (Node ${new_node_ver}, npm v${new_npm_ver})"
           NEW_TERMINAL_ADVISED=1
-          print_pass "Installed and verified Node.js (${new_node_ver}) and npm (v${new_npm_ver})."
-          print_info "Note: Open a new terminal window after setup (or run 'brew link --overwrite ${HOMEBREW_NODE_FORMULA}') if 'node' is not found in other tabs."
+          print_pass "Installed and verified Node.js (${new_node_ver}) and npm (v${new_npm_ver}) via Homebrew."
           return 0
         fi
       fi
     fi
-    print_info "Homebrew Node installation did not complete; attempting official standalone Node.js LTS installer..."
+  elif [[ "$PKG_MANAGER" == "apt-get" ]]; then
+    print_info "Installing Node.js using primary package manager: apt-get..."
+    if sudo apt-get update && sudo apt-get install -y nodejs npm; then
+      refresh_session_path
+      local apt_major
+      apt_major="$(parse_node_major "$(node --version 2>/dev/null || echo "0")")"
+      if (( apt_major >= MIN_NODE_MAJOR )) && command -v npm >/dev/null 2>&1; then
+        STATUS_NODE="PASS"
+        DETAIL_NODE="Installed via apt-get (Node $(node --version), npm v$(npm --version))"
+        print_pass "Installed Node.js and npm via apt-get."
+        return 0
+      fi
+    fi
+  elif [[ "$PKG_MANAGER" == "dnf" ]]; then
+    print_info "Installing Node.js using primary package manager: dnf..."
+    if sudo dnf install -y nodejs npm; then
+      refresh_session_path
+      local dnf_major
+      dnf_major="$(parse_node_major "$(node --version 2>/dev/null || echo "0")")"
+      if (( dnf_major >= MIN_NODE_MAJOR )) && command -v npm >/dev/null 2>&1; then
+        STATUS_NODE="PASS"
+        DETAIL_NODE="Installed via dnf (Node $(node --version), npm v$(npm --version))"
+        print_pass "Installed Node.js and npm via dnf."
+        return 0
+      fi
+    fi
+  elif [[ "$PKG_MANAGER" == "pacman" ]]; then
+    print_info "Installing Node.js using primary package manager: pacman..."
+    if sudo pacman -S --noconfirm nodejs npm; then
+      refresh_session_path
+      local pac_major
+      pac_major="$(parse_node_major "$(node --version 2>/dev/null || echo "0")")"
+      if (( pac_major >= MIN_NODE_MAJOR )) && command -v npm >/dev/null 2>&1; then
+        STATUS_NODE="PASS"
+        DETAIL_NODE="Installed via pacman (Node $(node --version), npm v$(npm --version))"
+        print_pass "Installed Node.js and npm via pacman."
+        return 0
+      fi
+    fi
   fi
 
-  # Route B: Official verified standalone per-user distribution from nodejs.org (works without Homebrew or sudo!)
-  if install_node_standalone_macos; then
+  # ---------------------------------------------------------------------------
+  # Resilient Fallback: Verified Standalone LTS Distribution from nodejs.org
+  # ---------------------------------------------------------------------------
+  print_info "Attempting verified standalone Node.js LTS installer fallback..."
+  if install_node_standalone; then
     refresh_session_path
     if command -v node >/dev/null 2>&1 && command -v npm >/dev/null 2>&1; then
       local std_node_ver std_npm_ver std_major
@@ -907,10 +1047,10 @@ check_and_setup_node() {
   fi
 
   STATUS_NODE="FAIL"
-  DETAIL_NODE="Standalone and package-manager installation failed"
+  DETAIL_NODE="Package-manager and standalone installation failed"
   print_fail "Could not automatically install and verify Node.js + npm."
-  print_info "Official Node.js LTS macOS installer (.pkg): ${NODE_DOWNLOAD_URL}"
-  add_recovery_note "Node.js & npm: Download and run the official macOS (.pkg) LTS installer from ${NODE_DOWNLOAD_URL}, open a new terminal, and re-run ./setup.zsh."
+  print_info "Official Node.js LTS installer: ${NODE_DOWNLOAD_URL}"
+  add_recovery_note "Node.js & npm: Download and run the official Node.js LTS installer from ${NODE_DOWNLOAD_URL}, open a new terminal, and re-run ./setup.zsh."
 }
 
 # -----------------------------------------------------------------------------
@@ -937,7 +1077,6 @@ verify_zepher_binary() {
 check_and_setup_zepher() {
   print_step "Step 4: Checking Zepher CLI (${ZEPHER_NPM_PACKAGE})"
 
-  # Guard against accidental confusion with 'zephyr-cli'
   if [[ "${ZEPHER_NPM_PACKAGE}" == "zephyr-cli" ]] || [[ "${ZEPHER_NPM_PACKAGE}" != "zepher-cli" ]]; then
     STATUS_ZEPHER="FAIL"
     DETAIL_ZEPHER="Package identity mismatch (${ZEPHER_NPM_PACKAGE} != zepher-cli)"
@@ -983,7 +1122,6 @@ check_and_setup_zepher() {
     return 0
   fi
 
-  # Verify exact package identity on npm before installing
   print_info "Verifying package identity for '${ZEPHER_NPM_PACKAGE}' against ${ZEPHER_NPM_URL}..."
   local pkg_name_remote pkg_bin_remote
   pkg_name_remote="$(npm view "${ZEPHER_NPM_PACKAGE}" name 2>/dev/null | tr -d '[:space:]' || true)"
@@ -1000,7 +1138,6 @@ check_and_setup_zepher() {
 
   print_info "Verified package '${pkg_name_remote}' (executable '${ZEPHER_BIN_NAME}' -> '${pkg_bin_remote}')."
 
-  # Prefer writable npm prefix or per-user ~/.npm-global so sudo is never required
   local npm_global_prefix
   npm_global_prefix="$(npm prefix -g 2>/dev/null || echo "/usr/local")"
   local install_cmd_rc=1
@@ -1021,7 +1158,7 @@ check_and_setup_zepher() {
       ln -sf "${user_npm_prefix}/bin/${ZEPHER_BIN_NAME}" "${user_bin_dir}/${ZEPHER_BIN_NAME}"
     fi
     NEW_TERMINAL_ADVISED=1
-    print_info "Note: To use '${ZEPHER_BIN_NAME}' in future terminal sessions, ensure '${user_npm_prefix}/bin' or '~/.local/bin' is on your PATH."
+    print_info "Note: Ensure '${user_npm_prefix}/bin' or '~/.local/bin' is on your PATH for future sessions."
   fi
 
   refresh_session_path
@@ -1043,16 +1180,14 @@ check_and_setup_zepher() {
 }
 
 # -----------------------------------------------------------------------------
-# 4. Orca Desktop Application (Homebrew Cask or Official Standalone DMG)
+# 4. Orca Desktop Application (Homebrew Cask -> Linux AppImage / Standalone DMG)
 # -----------------------------------------------------------------------------
 install_orca_dmg_standalone_macos() {
   local dmg_url="$1"
   local dmg_filename="$2"
   local arch_label="$3"
 
-  print_info "Homebrew is not installed. Attempting official Orca standalone DMG installation (${arch_label})..."
-  print_info "Fetching official release metadata from: ${ORCA_RELEASES_API_URL}"
-
+  print_info "Homebrew not found. Using official Orca standalone DMG (${arch_label})..."
   local tmp_dir
   tmp_dir="$(mktemp -d "${TMPDIR:-/tmp}/orca-dmg.XXXXXX")"
   local dmg_path="${tmp_dir}/${dmg_filename}"
@@ -1060,7 +1195,6 @@ install_orca_dmg_standalone_macos() {
 
   local expected_sha256=""
   if curl -fsSL --retry 2 --connect-timeout 10 -o "$release_json" "${ORCA_RELEASES_API_URL}" 2>/dev/null; then
-    # Extract sha256 digest for the specific DMG asset
     expected_sha256="$(grep -B 3 -A 6 "\"name\": \"${dmg_filename}\"" "$release_json" 2>/dev/null | grep -oE "sha256:[0-9a-fA-F]{64}" | head -n 1 | cut -d: -f2 | tr '[:upper:]' '[:lower:]' || true)"
   fi
 
@@ -1078,8 +1212,6 @@ install_orca_dmg_standalone_macos() {
     if [[ "$actual_sha256" != "$expected_sha256" ]]; then
       rm -rf "$tmp_dir"
       print_fail "SHA-256 checksum mismatch for ${dmg_filename}!"
-      print_info "Expected: ${expected_sha256}"
-      print_info "Actual  : ${actual_sha256:-unknown}"
       return 1
     fi
     print_pass "Verified official SHA-256 checksum (${actual_sha256})."
@@ -1092,7 +1224,6 @@ install_orca_dmg_standalone_macos() {
 
   local mount_point="${tmp_dir}/mnt"
   mkdir -p "$mount_point"
-  print_info "Mounting ${dmg_filename} read-only..."
   if ! hdiutil attach "$dmg_path" -mountpoint "$mount_point" -nobrowse -readonly -quiet; then
     rm -rf "$tmp_dir"
     print_fail "Could not mount ${dmg_filename}."
@@ -1106,7 +1237,6 @@ install_orca_dmg_standalone_macos() {
     return 1
   fi
 
-  # Verify Apple code signature before copying
   if command -v codesign >/dev/null 2>&1; then
     print_info "Verifying Apple code signature on Orca.app..."
     if ! codesign --verify --deep --strict "${mount_point}/Orca.app" >/dev/null 2>&1; then
@@ -1118,7 +1248,6 @@ install_orca_dmg_standalone_macos() {
     print_pass "Verified Apple code signature on Orca.app."
   fi
 
-  # Prefer /Applications if writable without sudo, otherwise per-user ~/Applications
   local target_apps_dir="${HOME}/Applications"
   if [[ -n "${ONBOARD_ORCA_INSTALL_DIR:-}" ]]; then
     target_apps_dir="${ONBOARD_ORCA_INSTALL_DIR}"
@@ -1142,18 +1271,33 @@ install_orca_dmg_standalone_macos() {
   return 0
 }
 
+install_orca_linux() {
+  local target_dir="${HOME}/.local/bin"
+  mkdir -p "$target_dir"
+  local target_file="${target_dir}/orca"
+
+  print_info "Downloading official Orca Linux AppImage from: ${ORCA_LINUX_APPIMAGE_URL}..."
+  if curl -fL --retry 2 --connect-timeout 15 -o "$target_file" "${ORCA_LINUX_APPIMAGE_URL}"; then
+    chmod +x "$target_file"
+    ln -sf "$target_file" "${target_dir}/orca-ide"
+    print_pass "Installed Orca Linux AppImage to ${target_file}"
+    return 0
+  fi
+  return 1
+}
+
 check_and_setup_orca_app() {
   print_step "Step 5: Checking Orca Desktop Application"
 
   local existing_app=""
-  if existing_app="$(find_orca_app_macos)"; then
+  if existing_app="$(find_orca_app)"; then
     STATUS_ORCA_APP="SKIPPED"
     DETAIL_ORCA_APP="Already installed (${existing_app})"
     print_skip "Orca desktop application is already installed at: ${existing_app}"
     return 0
   fi
 
-  print_info "Orca.app was not found in /Applications or ~/Applications."
+  print_info "Orca desktop application was not detected on this system."
 
   local recommended_dmg_url="${ORCA_DMG_X64_URL}"
   local recommended_dmg_name="orca-macos-x64.dmg"
@@ -1168,9 +1312,13 @@ check_and_setup_orca_app() {
     STATUS_ORCA_APP="ACTION REQUIRED"
     DETAIL_ORCA_APP="Not installed (ran with --check-only)"
     print_action "Orca desktop application is not installed."
-    print_info "Install with Homebrew: brew install --cask ${ORCA_BREW_CASK}"
-    print_info "Or download for ${arch_label}: ${recommended_dmg_url}"
-    add_recovery_note "Orca Desktop App: Re-run './setup.zsh' without --check-only, or install via 'brew install --cask ${ORCA_BREW_CASK}' / ${ORCA_INSTALL_DOCS_URL}."
+    if [[ "$OS_NAME" == "Darwin" ]]; then
+      print_info "Install with Homebrew: brew install --cask ${ORCA_BREW_CASK}"
+      print_info "Or download for ${arch_label}: ${recommended_dmg_url}"
+    else
+      print_info "Download official Linux AppImage: ${ORCA_LINUX_APPIMAGE_URL}"
+    fi
+    add_recovery_note "Orca Desktop App: Install via '${PKG_MANAGER_LABEL}' or download from ${ORCA_INSTALL_DOCS_URL}."
     return 0
   fi
 
@@ -1182,113 +1330,124 @@ check_and_setup_orca_app() {
     return 0
   fi
 
-  # Route A: Homebrew Cask if Homebrew is available
-  if [[ "$HAS_HOMEBREW" == "1" ]]; then
-    print_info "Installing Orca via official Homebrew Cask ('brew install --cask ${ORCA_BREW_CASK}')..."
-    print_info "Note: macOS may ask for your password to move Orca.app into /Applications."
-
+  # ---------------------------------------------------------------------------
+  # macOS Primary Path: Homebrew Cask
+  # ---------------------------------------------------------------------------
+  if [[ "$OS_NAME" == "Darwin" ]] && [[ "$HAS_HOMEBREW" == "1" ]]; then
+    print_info "Installing Orca using primary package manager: Homebrew ('brew install --cask ${ORCA_BREW_CASK}')..."
     if brew install --cask "${ORCA_BREW_CASK}"; then
       local installed_app=""
-      if installed_app="$(find_orca_app_macos)"; then
+      if installed_app="$(find_orca_app)"; then
         STATUS_ORCA_APP="PASS"
         DETAIL_ORCA_APP="Installed via Homebrew (${installed_app})"
         print_pass "Orca desktop application installed and verified at: ${installed_app}"
         return 0
       fi
     fi
-
-    STATUS_ORCA_APP="FAIL"
-    DETAIL_ORCA_APP="Homebrew cask installation failed or Orca.app not found afterward"
-    print_fail "Homebrew installation of '${ORCA_BREW_CASK}' did not complete cleanly."
-    print_info "Official installation docs : ${ORCA_INSTALL_DOCS_URL}"
-    print_info "Direct download (${arch_label}): ${recommended_dmg_url}"
-    add_recovery_note "Orca Desktop App: Download the macOS installer for ${arch_label} from ${ORCA_INSTALL_DOCS_URL} (${recommended_dmg_url}) and move Orca.app to /Applications."
-    return 0
+    print_info "Homebrew Cask installation did not complete; falling back to official standalone DMG..."
   fi
 
-  # Route B: Official standalone DMG when Homebrew is absent (no Homebrew installation required!)
-  if install_orca_dmg_standalone_macos "$recommended_dmg_url" "$recommended_dmg_name" "$arch_label"; then
-    local dmg_installed_app=""
-    if dmg_installed_app="$(find_orca_app_macos)"; then
+  # ---------------------------------------------------------------------------
+  # macOS Fallback: Official Standalone DMG
+  # ---------------------------------------------------------------------------
+  if [[ "$OS_NAME" == "Darwin" ]]; then
+    if install_orca_dmg_standalone_macos "$recommended_dmg_url" "$recommended_dmg_name" "$arch_label"; then
+      local dmg_installed_app=""
+      if dmg_installed_app="$(find_orca_app)"; then
+        STATUS_ORCA_APP="PASS"
+        DETAIL_ORCA_APP="Installed via official standalone DMG (${dmg_installed_app})"
+        print_pass "Orca desktop application installed and verified at: ${dmg_installed_app}"
+        return 0
+      fi
+    fi
+  elif [[ "$OS_NAME" == "Linux" ]]; then
+    if install_orca_linux; then
       STATUS_ORCA_APP="PASS"
-      DETAIL_ORCA_APP="Installed via official standalone DMG (${dmg_installed_app})"
-      print_pass "Orca desktop application installed and verified at: ${dmg_installed_app}"
+      DETAIL_ORCA_APP="Installed Orca Linux AppImage"
       return 0
     fi
   fi
 
-  # Fallback if standalone DMG download/mount could not complete automatically
   STATUS_ORCA_APP="ACTION REQUIRED"
   DETAIL_ORCA_APP="Manual download required (${ORCA_INSTALL_DOCS_URL})"
-  print_action "Could not complete automated DMG installation of Orca."
-  print_info "Note on Homebrew: Homebrew is NOT installed automatically because it modifies"
-  print_info "system directories (/opt/homebrew or /usr/local) and requires administrator access."
-  print_info "Please install Orca manually using the official download page:"
-  print_info "  Official Install Page          : ${ORCA_INSTALL_DOCS_URL}"
-  print_info "  Direct Download (${arch_label}): ${recommended_dmg_url}"
-  print_info "After opening the .dmg and dragging Orca.app into /Applications, re-run ./setup.zsh."
-  add_recovery_note "Orca Desktop App: Download Orca from ${ORCA_INSTALL_DOCS_URL} (${recommended_dmg_url}), move Orca.app to /Applications, and re-run ./setup.zsh."
+  print_action "Please install Orca manually using the official download page:"
+  print_info "  Official Install Page : ${ORCA_INSTALL_DOCS_URL}"
+  if [[ "$OS_NAME" == "Darwin" ]]; then
+    print_info "  Direct Download (${arch_label}): ${recommended_dmg_url}"
+  else
+    print_info "  Direct Download (Linux AppImage): ${ORCA_LINUX_APPIMAGE_URL}"
+  fi
+  add_recovery_note "Orca Desktop App: Download Orca from ${ORCA_INSTALL_DOCS_URL} and re-run ./setup.zsh."
 }
 
 # -----------------------------------------------------------------------------
-# 5. Orca CLI (orca)
+# 5. Orca CLI (orca / orca-ide)
 # -----------------------------------------------------------------------------
 print_orca_cli_registration_guide() {
   print_info "How to enable and register the Orca CLI:"
-  print_info "  1. Open the Orca desktop application (/Applications/Orca.app or ~/Applications/Orca.app)."
+  print_info "  1. Open the Orca desktop application."
   print_info "  2. In Orca, go to: Settings -> General -> Orca CLI"
-  print_info "  3. Click to register/enable the 'orca' command on your PATH."
+  print_info "  3. Click to register/enable the CLI command on your PATH."
   print_info "  4. Open a NEW terminal window so the updated PATH takes effect."
-  print_info "  5. Verify with: command -v orca && orca status --json"
+  if [[ "$OS_NAME" == "Linux" ]]; then
+    print_info "  Note on Linux: CLI command is 'orca-ide' or 'orca' (to prevent collision with GNOME screen reader)."
+    print_info "  5. Verify with: (command -v orca-ide || command -v orca) && (orca-ide status --json || orca status --json)"
+  else
+    print_info "  5. Verify with: command -v orca && orca status --json"
+  fi
   print_info "  Official CLI documentation: ${ORCA_CLI_DOCS_URL}"
 }
 
 check_and_setup_orca_cli() {
-  print_step "Step 6: Checking Orca CLI ('orca')"
+  print_step "Step 6: Checking Orca CLI ('orca' / 'orca-ide')"
 
   refresh_session_path
 
-  # Never assume installing Orca.app automatically registers the CLI on PATH.
-  if ! command -v orca >/dev/null 2>&1; then
+  local orca_cmd=""
+  if command -v orca >/dev/null 2>&1; then
+    orca_cmd="orca"
+  elif command -v orca-ide >/dev/null 2>&1; then
+    orca_cmd="orca-ide"
+  fi
+
+  if [[ -z "$orca_cmd" ]]; then
     STATUS_ORCA_CLI="ACTION REQUIRED"
     if [[ "$STATUS_ORCA_APP" == "PASS" ]] || [[ "$STATUS_ORCA_APP" == "SKIPPED" ]]; then
-      DETAIL_ORCA_CLI="Orca.app is installed, but 'orca' CLI is not yet registered on PATH"
-      print_action "Orca desktop app is installed, but the 'orca' CLI is not yet on your PATH."
+      DETAIL_ORCA_CLI="Orca app is installed, but CLI is not yet registered on PATH"
+      print_action "Orca desktop app is installed, but the CLI is not yet registered on your PATH."
     else
       DETAIL_ORCA_CLI="Install Orca desktop app first, then register CLI in Settings -> General -> Orca CLI"
-      print_action "The 'orca' CLI is not available on PATH (Orca desktop app must be installed first)."
+      print_action "The Orca CLI is not available on PATH (install Orca desktop app first)."
     fi
     print_orca_cli_registration_guide
-    add_recovery_note "Orca CLI: Open the Orca app -> Settings -> General -> Orca CLI to register 'orca' on your PATH, open a new terminal, and run 'orca status --json' (see ${ORCA_CLI_DOCS_URL})."
+    add_recovery_note "Orca CLI: Open the Orca app -> Settings -> General -> Orca CLI to register the CLI on your PATH, open a new terminal, and verify (see ${ORCA_CLI_DOCS_URL})."
     return 0
   fi
 
   local orca_bin_path
-  orca_bin_path="$(command -v orca 2>/dev/null || true)"
-  print_info "Found 'orca' executable on PATH: ${orca_bin_path}"
-  print_info "Verifying with documented command: orca status --json"
+  orca_bin_path="$(command -v "$orca_cmd" 2>/dev/null || true)"
+  print_info "Found Orca CLI executable on PATH: ${orca_bin_path}"
+  print_info "Verifying with documented command: ${orca_cmd} status --json"
 
-  local status_output=""
-  if status_output="$(orca status --json 2>&1)"; then
+  if "$orca_cmd" status --json >/dev/null 2>&1; then
     STATUS_ORCA_CLI="SKIPPED"
-    DETAIL_ORCA_CLI="Registered on PATH and verified ('orca status --json' succeeded)"
-    print_skip "Orca CLI is registered and verified via 'orca status --json'."
+    DETAIL_ORCA_CLI="Registered on PATH and verified ('${orca_cmd} status --json' succeeded)"
+    print_skip "Orca CLI is registered and verified via '${orca_cmd} status --json'."
     return 0
   fi
 
-  # If 'orca status --json' returned non-zero, check if the binary works when Orca GUI isn't running
-  if orca --help >/dev/null 2>&1 || orca --version >/dev/null 2>&1; then
+  if "$orca_cmd" --help >/dev/null 2>&1 || "$orca_cmd" --version >/dev/null 2>&1; then
     STATUS_ORCA_CLI="ACTION REQUIRED"
-    DETAIL_ORCA_CLI="CLI is on PATH (${orca_bin_path}), but 'orca status --json' requires Orca app to be running"
-    print_action "'orca' CLI is registered on PATH (${orca_bin_path}), but 'orca status --json' could not reach a running Orca session."
-    print_info "Please launch the Orca desktop app and run 'orca status --json' to confirm full connectivity."
-    add_recovery_note "Orca CLI: Launch the Orca desktop application so 'orca status --json' can connect to the active Orca instance."
+    DETAIL_ORCA_CLI="CLI is on PATH (${orca_bin_path}), but '${orca_cmd} status --json' requires Orca app to be running"
+    print_action "'${orca_cmd}' CLI is registered on PATH (${orca_bin_path}), but could not reach a running Orca session."
+    print_info "Please launch the Orca desktop app and run '${orca_cmd} status --json' to confirm connectivity."
+    add_recovery_note "Orca CLI: Launch the Orca desktop application so '${orca_cmd} status --json' can connect to the active Orca instance."
     return 0
   fi
 
   STATUS_ORCA_CLI="FAIL"
   DETAIL_ORCA_CLI="Found '${orca_bin_path}', but execution failed"
-  print_fail "'orca' was found at ${orca_bin_path}, but failed verification."
+  print_fail "'${orca_cmd}' was found at ${orca_bin_path}, but failed verification."
   print_orca_cli_registration_guide
   add_recovery_note "Orca CLI: Re-register the CLI in Orca under Settings -> General -> Orca CLI (see ${ORCA_CLI_DOCS_URL})."
 }
@@ -1317,8 +1476,10 @@ format_status_badge() {
 print_summary() {
   print ""
   print "${C_CYAN}=============================================================================${C_RESET}"
-  print "${C_BOLD}  Onboarding Setup Summary (macOS — ${ARCH_NAME})${C_RESET}"
+  print "${C_BOLD}  Onboarding Setup Summary (${OS_NAME} — ${ARCH_NAME})${C_RESET}"
   print "${C_CYAN}=============================================================================${C_RESET}"
+  print "  Primary Package Manager: ${PKG_MANAGER_LABEL}"
+  print "  ---------------------------------------------------------------------------"
   print "  Component            Status           Details"
   print "  -------------------- ---------------- -------------------------------------"
   print "  1. Git CLI           $(format_status_badge "$STATUS_GIT") ${DETAIL_GIT}"
